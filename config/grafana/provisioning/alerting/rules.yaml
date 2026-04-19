@@ -1,0 +1,135 @@
+# ============================================================================
+# Grafana Alerting -- Alert Rules (Loki)
+# ============================================================================
+#
+# Reglas de alerta para los microservicios FastAPI.
+# Las metricas se extraen de los logs via Loki (label `level` en FastAPI services).
+#
+# Thresholds:
+#   warning  -> > 3 errores en 5 min POR SERVICIO -> alerta a los 5 min sostenidos
+#   critical -> > 15 errores en 5 min en TOTAL    -> alerta a los 2 min sostenidos
+# ============================================================================
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: Microservicios - Errores
+    folder: Microservicios
+    interval: 2m
+    rules:
+      # -----------------------------------------------------------------------
+      # WARNING: Un servicio individual acumula > 3 errores en 5 minutos.
+      # Usa `sum by (service)` -> alerta por servicio, el label `service`
+      # aparece en el mensaje para saber cual fallo.
+      # -----------------------------------------------------------------------
+      - uid: ms-err-per-svc
+        title: Errores en microservicio
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              datasource:
+                type: loki
+                uid: loki
+              editorMode: code
+              expr: 'sum by (service) (count_over_time({level="error"}[5m]))'
+              instant: true
+              legendFormat: "{{service}}"
+              queryType: instant
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 3
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: B
+              type: classic_conditions
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Errores en {{ $labels.service }}"
+          description: "El servicio {{ $labels.service }} registro mas de 3 errores en los ultimos 5 minutos (valor: {{ $values.B }})."
+        labels:
+          severity: warning
+        isPaused: false
+
+      # -----------------------------------------------------------------------
+      # CRITICAL: El total de errores en todos los servicios supera 15 en 5 min.
+      # Indica un problema sistemico o una falla masiva en un servicio.
+      # -----------------------------------------------------------------------
+      - uid: ms-err-critical
+        title: Tasa de errores critica
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              datasource:
+                type: loki
+                uid: loki
+              editorMode: code
+              expr: 'sum(count_over_time({level="error"}[5m]))'
+              instant: true
+              legendFormat: "total errores"
+              queryType: instant
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 15
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: B
+              type: classic_conditions
+        noDataState: OK
+        execErrState: Alerting
+        for: 2m
+        annotations:
+          summary: "CRITICO: Alta tasa de errores en microservicios"
+          description: "Se detectaron mas de 15 errores en total en los ultimos 5 minutos (valor: {{ $values.B }}). Revision urgente."
+        labels:
+          severity: critical
+        isPaused: false

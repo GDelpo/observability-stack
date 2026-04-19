@@ -1,0 +1,118 @@
+# ============================================================================
+# Observability Stack — Loki + Promtail + Grafana
+# ============================================================================
+#
+# PREREQUISITES:
+#   1. Traefik running: docker compose -f docker-compose.traefik.yml up -d
+#   2. Network created: docker network create traefik-public
+#   3. .env file configured in parent directory (observability/.env)
+#
+# USAGE:
+#   cd observability
+#   docker compose --env-file .env -f docker/docker-compose.prod.traefik.yml up -d
+#
+# ACCESS:
+#   Grafana UI:  http://<server>/grafana/
+#   Loki API:    http://loki:3100  (solo red interna)
+# ============================================================================
+
+name: observability
+
+services:
+  # ---------------------------------------------------------------------------
+  # Loki — Backend de almacenamiento de logs
+  # ---------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: loki
+    restart: unless-stopped
+    volumes:
+      - ../config/loki.yml:/etc/loki/loki.yml:ro
+      - /opt/services/data/observability/loki:/loki
+    command: -config.file=/etc/loki/loki.yml
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 --spider http://localhost:3100/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - observability-internal
+      - traefik-public
+
+  # ---------------------------------------------------------------------------
+  # Promtail — Agent: lee logs Docker y los envía a Loki
+  # ---------------------------------------------------------------------------
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: promtail
+    restart: unless-stopped
+    user: root
+    volumes:
+      - ../config/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /opt/services/data/observability/promtail:/promtail
+    command: -config.file=/etc/promtail/promtail.yml
+    depends_on:
+      loki:
+        condition: service_healthy
+    networks:
+      - observability-internal
+
+  # ---------------------------------------------------------------------------
+  # Grafana — UI de consulta y dashboards
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      GF_SECURITY_SECRET_KEY: ${GRAFANA_SECRET_KEY:?GRAFANA_SECRET_KEY is required}
+      GF_SERVER_ROOT_URL: "http://${SERVER_IP:-192.0.2.10}/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_LOG_LEVEL: warn
+      # SMTP via SendGrid — para alertas por email
+      GF_SMTP_ENABLED: "true"
+      GF_SMTP_HOST: "smtp.sendgrid.net:587"
+      GF_SMTP_USER: "apikey"
+      GF_SMTP_PASSWORD: ${SENDGRID_API_KEY:?SENDGRID_API_KEY is required}
+      GF_SMTP_FROM_ADDRESS: "noreply@example.com"
+      GF_SMTP_FROM_NAME: "Grafana - Example Corp"
+      GF_SMTP_STARTTLS_POLICY: "MandatoryStartTLS"
+    volumes:
+      - /opt/services/data/observability/grafana:/var/lib/grafana
+      - ../config/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - observability-internal
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.grafana.rule=PathPrefix(`/grafana`)"
+      - "traefik.http.routers.grafana.entrypoints=web"
+      - "traefik.http.routers.grafana.service=grafana"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+      - "traefik.http.services.grafana.loadbalancer.healthcheck.path=/api/health"
+      - "traefik.http.services.grafana.loadbalancer.healthcheck.interval=30s"
+
+networks:
+  observability-internal:
+    driver: bridge
+  traefik-public:
+    external: true

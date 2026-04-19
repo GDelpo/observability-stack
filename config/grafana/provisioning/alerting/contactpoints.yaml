@@ -1,0 +1,15 @@
+# ============================================================================
+# Grafana Alerting — Contact Points
+# ============================================================================
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: Ops Team
+    receivers:
+      - uid: ops-team-email
+        type: email
+        settings:
+          addresses: admin@example.com
+          singleEmail: false
+        disableResolveMessage: false

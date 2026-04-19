@@ -1,0 +1,19 @@
+# ============================================================================
+# Grafana Alerting — Notification Policies
+# ============================================================================
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: Ops Team
+    group_by: [grafana_folder, alertname, service]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      # Críticos se re-notifican cada hora
+      - receiver: Ops Team
+        matchers:
+          - severity = critical
+        group_wait: 0s
+        repeat_interval: 1h

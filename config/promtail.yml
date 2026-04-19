@@ -1,0 +1,60 @@
+# ============================================================================
+# Promtail — Lee logs de containers Docker y los envía a Loki
+# ============================================================================
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /promtail/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+
+    relabel_configs:
+      # service = nombre del container (sin el / inicial que agrega Docker)
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: service
+
+      # Solo nuestros containers — el resto se descarta
+      - source_labels: [service]
+        regex: 'identity_api|mailsender_api|mailsender_worker|records_api|dispatcher_api|dispatcher_worker|drive_api|storage_api|cancellations_api|tickets_api|legacy_api|scheduler_api|reports_web|traefik|docs_web|docs_auth|docs_cms'
+        action: keep
+
+      # stdout / stderr como label adicional
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: stream
+
+    pipeline_stages:
+      # Drop health check requests — Traefik sondea /health cada 30s (ruido puro)
+      - drop:
+          expression: 'GET /health'
+
+      # JSON parsing solo para servicios FastAPI — reports_web y traefik no emiten JSON estándar
+      - match:
+          selector: '{service=~"identity_api|mailsender_api|mailsender_worker|records_api|dispatcher_api|dispatcher_worker|drive_api|storage_api|cancellations_api|tickets_api|legacy_api|scheduler_api"}'
+          stages:
+            - json:
+                expressions:
+                  level: level
+                  message: message
+            - labels:
+                level:
+
+      # Gunicorn logs (texto plano) — extrae nivel cuando JSON parsing no seteo level
+      # Ejemplo: [CRITICAL] WORKER TIMEOUT (pid:1234) — invisible sin esto
+      - match:
+          selector: '{service=~"identity_api|mailsender_api|mailsender_worker|records_api|dispatcher_api|dispatcher_worker|drive_api|storage_api|cancellations_api|tickets_api|legacy_api|scheduler_api", level=""}'
+          stages:
+            - regex:
+                expression: '\[(?P<level>CRITICAL|ERROR|WARNING|INFO|DEBUG)\]'
+            - labels:
+                level:
